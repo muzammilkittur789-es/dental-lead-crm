@@ -19,7 +19,8 @@ import {
 import { exportClinicsToCsv } from './services/exportImport';
 import {
   getGoogleSheetsConfig,
-  pushClinicsToGoogleSheet
+  pushClinicsToGoogleSheet,
+  deleteClinicFromGoogleSheet
 } from './services/googleSheets';
 import type { GoogleSheetsConfig } from './services/googleSheets';
 import { calculateRevenueSummary } from './services/revenue';
@@ -166,19 +167,35 @@ export function App() {
 
   const handleConfirmDelete = async () => {
     if (!clinicToDelete) return;
+    const targetClinic = clinicToDelete;
     try {
-      await deleteClinic(clinicToDelete.id);
+      await deleteClinic(targetClinic.id);
       const updatedClinics = await getAllClinics();
       setClinics(updatedClinics);
       setIsDeleteDialogOpen(false);
 
-      if (selectedClinic && selectedClinic.id === clinicToDelete.id) {
+      if (selectedClinic && selectedClinic.id === targetClinic.id) {
         setIsDetailModalOpen(false);
         setSelectedClinic(null);
       }
 
-      addToast('info', `Deleted "${clinicToDelete.name}" from CRM.`, 'Clinic Removed');
-      triggerGoogleSheetsAutoSync(updatedClinics);
+      const config = getGoogleSheetsConfig();
+      if (config.webAppUrl) {
+        try {
+          await deleteClinicFromGoogleSheet(
+            config.webAppUrl,
+            targetClinic.id,
+            targetClinic.name,
+            updatedClinics
+          );
+          setSheetsConfig(getGoogleSheetsConfig());
+          addToast('info', `Deleted "${targetClinic.name}" from CRM & Google Sheet.`, 'Clinic Removed');
+        } catch {
+          addToast('info', `Deleted "${targetClinic.name}" from CRM.`, 'Clinic Removed');
+        }
+      } else {
+        addToast('info', `Deleted "${targetClinic.name}" from CRM.`, 'Clinic Removed');
+      }
     } catch {
       addToast('error', 'Failed to delete clinic.', 'Delete Error');
     }
@@ -271,6 +288,15 @@ export function App() {
   const handleClearAll = async () => {
     await clearAllClinics();
     await refreshClinics();
+    const config = getGoogleSheetsConfig();
+    if (config.webAppUrl) {
+      try {
+        await pushClinicsToGoogleSheet(config.webAppUrl, []);
+        setSheetsConfig(getGoogleSheetsConfig());
+      } catch {
+        // Ignore background sync error
+      }
+    }
   };
 
   // CSV Export
