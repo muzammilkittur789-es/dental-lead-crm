@@ -24,7 +24,6 @@ export function getGoogleSheetsConfig(): GoogleSheetsConfig {
     return {
       ...DEFAULT_SHEETS_CONFIG,
       ...parsed,
-      // If user has a webAppUrl configured, ensure autoSync defaults to true unless explicitly turned off
       autoSync: parsed.autoSync !== undefined ? parsed.autoSync : true
     };
   } catch {
@@ -42,10 +41,14 @@ export function saveGoogleSheetsConfig(config: GoogleSheetsConfig): void {
 
 /**
  * Standard copyable Google Apps Script code for the user to paste into their Google Sheet.
- * Includes automatic text wrapping, custom column sizing, and real-time row deletion.
+ * Features:
+ * 1. Automatic Text Wrapping on all data rows
+ * 2. Status Badge Color-Coding (Won=Green, Interested=Teal, Demo=Blue, Follow-up=Amber, Lost=Red, etc.)
+ * 3. High-Opportunity Highlight for 'No Website Found'
+ * 4. Real-time Single Clinic Row Deletion and Full Sync
  */
-export const GOOGLE_APPS_SCRIPT_TEMPLATE = `// Dental Lead Finder & CRM - Google Sheets Sync Script v2
-// Features: Automatic Text Wrapping, Header Styling, Real-Time Row Deletion
+export const GOOGLE_APPS_SCRIPT_TEMPLATE = `// Dental Lead Finder & CRM - Google Sheets Sync Script v3
+// Features: Status Cell Color Coding, Text Wrapping, Real-Time Row Deletion
 
 function setupSheetHeaders(sheet) {
   var headers = [
@@ -73,6 +76,42 @@ function setupSheetHeaders(sheet) {
   sheet.setFrozenRows(1);
 }
 
+function applyConditionalFormatting(sheet) {
+  var lastRow = Math.max(sheet.getLastRow(), 2);
+  var salesStatusRange = sheet.getRange(2, 7, lastRow - 1, 1);
+  var websiteStatusRange = sheet.getRange(2, 6, lastRow - 1, 1);
+
+  function makeRule(range, text, bgColor, fontColor) {
+    return SpreadsheetApp.newConditionalFormatRule()
+      .whenTextEqualTo(text)
+      .setBackground(bgColor)
+      .setFontColor(fontColor)
+      .setRanges([range])
+      .build();
+  }
+
+  // Color rules for Sales Status (Column G)
+  var rules = [
+    makeRule(salesStatusRange, "Won", "#DCFCE7", "#15803D"),            // Emerald Green
+    makeRule(salesStatusRange, "Interested", "#CCFBF1", "#0F766E"),     // Deep Teal
+    makeRule(salesStatusRange, "Demo Ready", "#DBEAFE", "#1D4ED8"),     // Soft Blue
+    makeRule(salesStatusRange, "Follow-up", "#FEF3C7", "#B45309"),      // Warm Amber
+    makeRule(salesStatusRange, "Called", "#E0F2FE", "#0369A1"),         // Sky Blue
+    makeRule(salesStatusRange, "No Answer", "#FFEDD5", "#C2410C"),      // Soft Orange
+    makeRule(salesStatusRange, "To Call", "#F3F4F6", "#374151"),        // Neutral Gray
+    makeRule(salesStatusRange, "Lost", "#FEE2E2", "#B91C1C"),           // Soft Red
+    makeRule(salesStatusRange, "Not Interested", "#FEE2E2", "#B91C1C"), // Soft Red
+    makeRule(salesStatusRange, "Ignored", "#F3F4F6", "#6B7280"),        // Muted Gray
+
+    // Color rules for Website Status (Column F)
+    makeRule(websiteStatusRange, "No Website Found", "#FEF2F2", "#B91C1C"), // High opportunity prospect
+    makeRule(websiteStatusRange, "Has Website", "#F0FDF4", "#15803D"),
+    makeRule(websiteStatusRange, "Needs Verification", "#FFFBEB", "#B45309")
+  ];
+
+  sheet.setConditionalFormatRules(rules);
+}
+
 function applySheetFormatting(sheet) {
   var lastRow = Math.max(sheet.getLastRow(), 1);
   var lastCol = Math.max(sheet.getLastColumn(), 14);
@@ -81,14 +120,22 @@ function applySheetFormatting(sheet) {
   sheet.getRange(1, 1, lastRow, lastCol).setWrap(true);
   sheet.getRange(1, 1, lastRow, lastCol).setVerticalAlignment("top");
 
+  // Center align badges
+  if (lastRow > 1) {
+    sheet.getRange(2, 5, lastRow - 1, 1).setHorizontalAlignment("center"); // Phone
+    sheet.getRange(2, 6, lastRow - 1, 1).setHorizontalAlignment("center").setFontWeight("bold"); // Website Status
+    sheet.getRange(2, 7, lastRow - 1, 1).setHorizontalAlignment("center").setFontWeight("bold"); // Sales Status
+    sheet.getRange(2, 8, lastRow - 1, 1).setHorizontalAlignment("center"); // Follow-up Date
+  }
+
   // Optimal readable column widths
   sheet.setColumnWidth(1, 110); // Lead ID
   sheet.setColumnWidth(2, 220); // Clinic Name
   sheet.setColumnWidth(3, 120); // City
   sheet.setColumnWidth(4, 140); // Locality
   sheet.setColumnWidth(5, 140); // Contact Number
-  sheet.setColumnWidth(6, 150); // Website Status
-  sheet.setColumnWidth(7, 130); // Sales Status
+  sheet.setColumnWidth(6, 160); // Website Status
+  sheet.setColumnWidth(7, 140); // Sales Status
   sheet.setColumnWidth(8, 120); // Follow-up Date
   sheet.setColumnWidth(9, 230); // Address
   sheet.setColumnWidth(10, 200); // Google Maps URL
@@ -96,6 +143,9 @@ function applySheetFormatting(sheet) {
   sheet.setColumnWidth(12, 260); // Outreach Notes
   sheet.setColumnWidth(13, 140); // Date Added
   sheet.setColumnWidth(14, 140); // Last Updated
+
+  // Apply conditional format rules
+  applyConditionalFormatting(sheet);
 }
 
 function doGet(e) {
@@ -109,7 +159,7 @@ function doGet(e) {
   var clinics = [];
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
-    if (!row[1]) continue; // Skip empty rows
+    if (!row[1]) continue;
 
     clinics.push({
       id: String(row[0] || ""),
@@ -187,6 +237,31 @@ function doPost(e) {
           ];
         });
         sheet.getRange(2, 1, rows.length, 14).setValues(rows);
+
+        // Direct cell colors for Sales Status & Website Status
+        for (var i = 0; i < clinics.length; i++) {
+          var rowIdx = i + 2;
+          var sStatus = clinics[i].salesStatus || "To Call";
+          var sBg = "#F3F4F6", sColor = "#374151";
+
+          if (sStatus === "Won") { sBg = "#DCFCE7"; sColor = "#15803D"; }
+          else if (sStatus === "Interested") { sBg = "#CCFBF1"; sColor = "#0F766E"; }
+          else if (sStatus === "Demo Ready") { sBg = "#DBEAFE"; sColor = "#1D4ED8"; }
+          else if (sStatus === "Follow-up") { sBg = "#FEF3C7"; sColor = "#B45309"; }
+          else if (sStatus === "Called") { sBg = "#E0F2FE"; sColor = "#0369A1"; }
+          else if (sStatus === "No Answer") { sBg = "#FFEDD5"; sColor = "#C2410C"; }
+          else if (sStatus === "Lost" || sStatus === "Not Interested") { sBg = "#FEE2E2"; sColor = "#B91C1C"; }
+
+          sheet.getRange(rowIdx, 7).setBackground(sBg).setFontColor(sColor);
+
+          // Website Status color
+          var wStatus = clinics[i].websiteStatus || "No Website Found";
+          var wBg = "#FEF2F2", wColor = "#B91C1C";
+          if (wStatus === "Has Website") { wBg = "#F0FDF4"; wColor = "#15803D"; }
+          else if (wStatus === "Needs Verification") { wBg = "#FFFBEB"; wColor = "#B45309"; }
+
+          sheet.getRange(rowIdx, 6).setBackground(wBg).setFontColor(wColor);
+        }
       }
 
       applySheetFormatting(sheet);
